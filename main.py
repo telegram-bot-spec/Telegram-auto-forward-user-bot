@@ -1,10 +1,8 @@
 import os
 import sys
 import logging
-from pyrogram import Client
-from pyrogram.enums import ChatType
-import json
-from datetime import datetime
+from pyrogram import Client, filters
+from pyrogram.types import Message
 
 # Setup logging
 logging.basicConfig(
@@ -18,6 +16,10 @@ API_ID = os.getenv('API_ID')
 API_HASH = os.getenv('API_HASH')
 SESSION_STRING = os.getenv('SESSION_STRING')
 
+# Your private group link - convert to chat ID after first run
+# Put your group invite link here or the group ID (like -1001234567890)
+TARGET_GROUP = os.getenv('TARGET_GROUP', 'https://t.me/+rGX0kTfm9lI1YzFl')
+
 # Validate environment variables
 if not API_ID or not API_HASH or not SESSION_STRING:
     logger.error("❌ ERROR: Required environment variables are missing!")
@@ -25,19 +27,18 @@ if not API_ID or not API_HASH or not SESSION_STRING:
     logger.error("\nFor Railway deployment:")
     logger.error("1. Go to your Railway project")
     logger.error("2. Click on 'Variables' tab")
-    logger.error("3. Add these three variables with your values")
+    logger.error("3. Add these variables with your values")
     sys.exit(1)
 
 # Validate SESSION_STRING format
 if len(SESSION_STRING) < 100:
     logger.error("❌ ERROR: SESSION_STRING appears invalid (too short)")
-    logger.error("Please regenerate using generate_session.py")
     sys.exit(1)
 
 # Create client
 try:
     app = Client(
-        "private_msg_exporter",
+        "auto_forward_bot",
         api_id=int(API_ID),
         api_hash=API_HASH,
         session_string=SESSION_STRING
@@ -50,155 +51,150 @@ except Exception as e:
     logger.error(f"❌ Failed to create client: {e}")
     sys.exit(1)
 
-async def export_all_private_messages():
-    """Export ALL private messages from ALL users"""
+# Store the actual chat ID after joining
+actual_group_id = None
+
+@app.on_message(filters.private & filters.incoming & ~filters.me & ~filters.bot)
+async def forward_private_messages(client: Client, message: Message):
+    """
+    Auto-forward EVERY incoming private message to the target group
+    This catches messages INSTANTLY before they can be deleted!
+    """
+    global actual_group_id
+    
     try:
-        async with app:
-            logger.info("✅ Connected to Telegram")
-            
-            # Create output directory
-            output_dir = "private_messages_export"
-            os.makedirs(output_dir, exist_ok=True)
-            
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            all_chats_file = f"{output_dir}/all_private_chats_{timestamp}.json"
-            summary_file = f"{output_dir}/summary_{timestamp}.txt"
-            
-            all_data = []
-            total_messages = 0
-            total_chats = 0
-            
-            logger.info("🔍 Scanning all private chats...")
-            
-            # Get all dialogs (conversations)
-            async for dialog in app.get_dialogs():
-                # Only process PRIVATE chats (1-on-1 conversations with users)
-                if dialog.chat.type == ChatType.PRIVATE:
-                    chat = dialog.chat
-                    total_chats += 1
-                    
-                    user_name = f"{chat.first_name or ''} {chat.last_name or ''}".strip()
-                    username = f"@{chat.username}" if chat.username else "No username"
-                    
-                    logger.info(f"\n📱 Processing chat {total_chats}: {user_name} ({username})")
-                    logger.info(f"   User ID: {chat.id}")
-                    
-                    chat_data = {
-                        "user_info": {
-                            "id": chat.id,
-                            "first_name": chat.first_name,
-                            "last_name": chat.last_name,
-                            "username": chat.username,
-                            "is_verified": chat.is_verified if hasattr(chat, 'is_verified') else False,
-                            "is_premium": chat.is_premium if hasattr(chat, 'is_premium') else False,
-                            "is_bot": chat.is_bot if hasattr(chat, 'is_bot') else False
-                        },
-                        "messages": []
-                    }
-                    
-                    message_count = 0
-                    
-                    # Get all messages from this chat
-                    async for message in app.get_chat_history(chat.id):
-                        message_count += 1
-                        
-                        msg_data = {
-                            "id": message.id,
-                            "date": message.date.isoformat() if message.date else None,
-                            "from_me": message.outgoing,
-                            "text": message.text,
-                            "caption": message.caption,
-                            "media_type": str(message.media) if message.media else None
-                        }
-                        
-                        chat_data["messages"].append(msg_data)
-                        
-                        if message_count % 50 == 0:
-                            logger.info(f"   📊 Fetched {message_count} messages...")
-                    
-                    total_messages += message_count
-                    logger.info(f"   ✅ Total messages in this chat: {message_count}")
-                    
-                    all_data.append(chat_data)
-                    
-                    # Save individual chat to separate file
-                    safe_username = (chat.username or 'no_username').replace('/', '_')
-                    individual_file = f"{output_dir}/chat_{chat.id}_{safe_username}_{timestamp}.json"
-                    with open(individual_file, 'w', encoding='utf-8') as f:
-                        json.dump(chat_data, f, indent=2, ensure_ascii=False)
-                    
-                    # Also create readable text file for this chat
-                    txt_file = f"{output_dir}/chat_{chat.id}_{safe_username}_{timestamp}.txt"
-                    with open(txt_file, 'w', encoding='utf-8') as f:
-                        f.write(f"CHAT WITH: {user_name}\n")
-                        f.write(f"USERNAME: {username}\n")
-                        f.write(f"USER ID: {chat.id}\n")
-                        f.write(f"TOTAL MESSAGES: {message_count}\n")
-                        f.write(f"EXPORTED: {datetime.now()}\n")
-                        f.write("=" * 80 + "\n\n")
-                        
-                        for msg in reversed(chat_data["messages"]):
-                            f.write(f"[{msg['date']}]\n")
-                            f.write(f"{'📤 YOU' if msg['from_me'] else '📥 ' + user_name}: ")
-                            
-                            if msg['text']:
-                                f.write(f"{msg['text']}\n")
-                            elif msg['caption']:
-                                f.write(f"{msg['caption']}\n")
-                            elif msg['media_type']:
-                                f.write(f"[{msg['media_type']}]\n")
-                            else:
-                                f.write("[Message]\n")
-                            
-                            f.write("-" * 80 + "\n\n")
-            
-            # Save combined JSON with all chats
-            with open(all_chats_file, 'w', encoding='utf-8') as f:
-                json.dump(all_data, f, indent=2, ensure_ascii=False)
-            
-            # Create summary file
-            with open(summary_file, 'w', encoding='utf-8') as f:
-                f.write("TELEGRAM PRIVATE MESSAGES EXPORT SUMMARY\n")
-                f.write("=" * 80 + "\n\n")
-                f.write(f"Export Date: {datetime.now()}\n")
-                f.write(f"Total Private Chats: {total_chats}\n")
-                f.write(f"Total Messages: {total_messages}\n\n")
-                f.write("=" * 80 + "\n\n")
-                f.write("CHATS:\n\n")
-                
-                for idx, chat_data in enumerate(all_data, 1):
-                    user = chat_data['user_info']
-                    name = f"{user['first_name'] or ''} {user['last_name'] or ''}".strip()
-                    username = f"@{user['username']}" if user['username'] else "No username"
-                    msg_count = len(chat_data['messages'])
-                    
-                    f.write(f"{idx}. {name} ({username})\n")
-                    f.write(f"   User ID: {user['id']}\n")
-                    f.write(f"   Messages: {msg_count}\n")
-                    if user['is_verified']:
-                        f.write(f"   ✅ Verified\n")
-                    if user['is_premium']:
-                        f.write(f"   ⭐ Premium\n")
-                    if user['is_bot']:
-                        f.write(f"   🤖 Bot\n")
-                    f.write("\n")
-            
-            logger.info("\n" + "=" * 80)
-            logger.info(f"✅ EXPORT COMPLETED!")
-            logger.info(f"📊 Total private chats exported: {total_chats}")
-            logger.info(f"💬 Total messages exported: {total_messages}")
-            logger.info(f"📁 Files saved in: {output_dir}/")
-            logger.info("=" * 80)
-            
+        user = message.from_user
+        
+        # Build user info
+        first_name = user.first_name or ""
+        last_name = user.last_name or ""
+        full_name = f"{first_name} {last_name}".strip()
+        username = f"@{user.username}" if user.username else "No username"
+        user_id = user.id
+        
+        # Create detailed info message
+        info_lines = []
+        info_lines.append("🔔 **NEW MESSAGE RECEIVED**")
+        info_lines.append("━━━━━━━━━━━━━━━━━━━━")
+        info_lines.append(f"👤 **From:** {full_name}")
+        info_lines.append(f"🆔 **User ID:** `{user_id}`")
+        info_lines.append(f"📝 **Username:** {username}")
+        
+        if user.username:
+            info_lines.append(f"🔗 **Profile:** https://t.me/{user.username}")
+        else:
+            info_lines.append(f"🔗 **Profile:** tg://user?id={user_id}")
+        
+        if user.is_verified:
+            info_lines.append("✅ **Verified Account**")
+        if user.is_premium:
+            info_lines.append("⭐ **Premium User**")
+        if user.is_bot:
+            info_lines.append("🤖 **Bot Account**")
+        
+        info_lines.append("━━━━━━━━━━━━━━━━━━━━")
+        
+        user_info = "\n".join(info_lines)
+        
+        # Send user info first
+        await client.send_message(actual_group_id, user_info, disable_web_page_preview=False)
+        
+        # Forward the actual message immediately
+        await message.forward(actual_group_id)
+        
+        logger.info(f"✅ FORWARDED: {full_name} ({username}) | User ID: {user_id}")
+        
     except Exception as e:
-        logger.error(f"❌ Error during export: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"❌ Failed to forward message: {e}")
+        logger.error(f"   From: {user.first_name if user else 'Unknown'}")
+
+@app.on_message(filters.private & filters.incoming & ~filters.me & filters.service)
+async def forward_service_messages(client: Client, message: Message):
+    """
+    Also forward service messages (calls, voice chats, etc.)
+    """
+    global actual_group_id
+    
+    try:
+        user = message.from_user
+        
+        first_name = user.first_name or ""
+        last_name = user.last_name or ""
+        full_name = f"{first_name} {last_name}".strip()
+        username = f"@{user.username}" if user.username else "No username"
+        
+        service_info = f"📞 **SERVICE MESSAGE**\n"
+        service_info += f"👤 From: {full_name} ({username})\n"
+        service_info += f"🆔 User ID: `{user.id}`"
+        
+        await client.send_message(actual_group_id, service_info)
+        await message.forward(actual_group_id)
+        
+        logger.info(f"✅ FORWARDED SERVICE: {full_name} ({username})")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to forward service message: {e}")
+
+async def initialize():
+    """Initialize and join the target group"""
+    global actual_group_id
+    
+    try:
+        # If TARGET_GROUP is a link, join it
+        if TARGET_GROUP.startswith('https://t.me/'):
+            logger.info(f"🔗 Joining group via invite link...")
+            chat = await app.join_chat(TARGET_GROUP)
+            actual_group_id = chat.id
+            logger.info(f"✅ Joined group: {chat.title}")
+            logger.info(f"📊 Group ID: {actual_group_id}")
+        else:
+            # Already a chat ID
+            actual_group_id = TARGET_GROUP
+            chat = await app.get_chat(actual_group_id)
+            logger.info(f"✅ Using existing group: {chat.title}")
+            logger.info(f"📊 Group ID: {actual_group_id}")
+        
+        # Send startup message to group
+        startup_msg = "🚀 **AUTO-FORWARD BOT STARTED**\n"
+        startup_msg += "━━━━━━━━━━━━━━━━━━━━\n"
+        startup_msg += "✅ Bot is now ONLINE\n"
+        startup_msg += "📱 All incoming private messages will be forwarded here\n"
+        startup_msg += "⚡ Messages are captured INSTANTLY\n"
+        startup_msg += "🛡️ Even deleted messages will be saved here\n"
+        startup_msg += "━━━━━━━━━━━━━━━━━━━━"
+        
+        await app.send_message(actual_group_id, startup_msg)
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to join/access group: {e}")
+        logger.error("Make sure:")
+        logger.error("1. The invite link is correct")
+        logger.error("2. Your account has permission to join")
+        logger.error("3. You're the group owner/admin")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    logger.info("🚀 Starting PRIVATE Messages Exporter...")
-    logger.info("📱 This will export ALL private messages from ALL users")
-    logger.info("⏳ This may take a while depending on how many chats you have...\n")
+    logger.info("=" * 60)
+    logger.info("🚀 TELEGRAM AUTO-FORWARD BOT")
+    logger.info("=" * 60)
+    logger.info("📱 Mode: LIVE FORWARDING (New messages only)")
+    logger.info("🎯 Target: All incoming private messages")
+    logger.info(f"📊 Forward to: {TARGET_GROUP}")
+    logger.info("⚡ Speed: INSTANT (before deletion)")
+    logger.info("=" * 60)
     
-    import asyncio
-    asyncio.run(export_all_private_messages())
+    try:
+        # Start the client with initialization
+        with app:
+            import asyncio
+            asyncio.get_event_loop().run_until_complete(initialize())
+            logger.info("\n✅ Bot is running! Press Ctrl+C to stop.\n")
+            app.run()
+            
+    except KeyboardInterrupt:
+        logger.info("\n🛑 Bot stopped by user")
+    except Exception as e:
+        logger.error(f"❌ Fatal error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        sys.exit(1)
