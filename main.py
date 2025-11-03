@@ -16,9 +16,9 @@ API_ID = os.getenv('API_ID')
 API_HASH = os.getenv('API_HASH')
 SESSION_STRING = os.getenv('SESSION_STRING')
 
-# Your private group link - convert to chat ID after first run
-# Put your group invite link here or the group ID (like -1001234567890)
-TARGET_GROUP = os.getenv('TARGET_GROUP', 'https://t.me/+rGX0kTfm9lI1YzFl')
+# Your group username or ID
+# Use: @logsbackupofall OR https://t.me/logsbackupofall OR numeric ID
+TARGET_GROUP = os.getenv('TARGET_GROUP', '@logsbackupofall')
 
 # Validate environment variables
 if not API_ID or not API_HASH or not SESSION_STRING:
@@ -136,23 +136,64 @@ async def forward_service_messages(client: Client, message: Message):
         logger.error(f"❌ Failed to forward service message: {e}")
 
 async def initialize():
-    """Initialize and join the target group"""
+    """Initialize and access the target group"""
     global actual_group_id
     
     try:
-        # If TARGET_GROUP is a link, join it
-        if TARGET_GROUP.startswith('https://t.me/'):
-            logger.info(f"🔗 Joining group via invite link...")
-            chat = await app.join_chat(TARGET_GROUP)
-            actual_group_id = chat.id
-            logger.info(f"✅ Joined group: {chat.title}")
-            logger.info(f"📊 Group ID: {actual_group_id}")
-        else:
-            # Already a chat ID
-            actual_group_id = TARGET_GROUP
+        target = TARGET_GROUP.strip()
+        
+        # Handle different formats
+        if target.startswith('-100') or target.lstrip('-').isdigit():
+            # Numeric ID (best option)
+            actual_group_id = int(target)
+            logger.info(f"🔗 Using numeric group ID: {actual_group_id}")
             chat = await app.get_chat(actual_group_id)
-            logger.info(f"✅ Using existing group: {chat.title}")
-            logger.info(f"📊 Group ID: {actual_group_id}")
+            logger.info(f"✅ Accessed group: {chat.title}")
+            
+        elif target.startswith('https://t.me/+'):
+            # Private invite link
+            logger.info(f"🔗 Joining private group via invite link...")
+            try:
+                chat = await app.join_chat(target)
+                actual_group_id = chat.id
+                logger.info(f"✅ Joined group: {chat.title}")
+            except Exception as join_error:
+                logger.info(f"⚠️ Could not join: {join_error}")
+                logger.info("🔍 Searching your existing chats...")
+                
+                async for dialog in app.get_dialogs():
+                    if dialog.chat.invite_link and target in str(dialog.chat.invite_link):
+                        chat = dialog.chat
+                        actual_group_id = chat.id
+                        logger.info(f"✅ Found group: {chat.title}")
+                        break
+                else:
+                    raise Exception("Group not found. Join manually first!")
+                    
+        elif target.startswith('https://t.me/'):
+            # Public link - extract username
+            username = target.split('/')[-1]
+            if len(username) > 32:
+                raise Exception(f"Username '{username}' is too long (max 32 chars). Shorten it in Telegram settings!")
+            logger.info(f"🔗 Accessing public group: @{username}")
+            chat = await app.get_chat(username)
+            actual_group_id = chat.id
+            logger.info(f"✅ Found group: {chat.title}")
+            
+        elif target.startswith('@'):
+            # Username format
+            username = target[1:]  # Remove @
+            if len(username) > 32:
+                raise Exception(f"Username '{username}' is too long (max 32 chars). Shorten it in Telegram settings!")
+            logger.info(f"🔗 Accessing public group: @{username}")
+            chat = await app.get_chat(username)
+            actual_group_id = chat.id
+            logger.info(f"✅ Found group: {chat.title}")
+            
+        else:
+            raise Exception(f"Invalid TARGET_GROUP format: {target}")
+        
+        logger.info(f"📊 Group ID: {actual_group_id}")
         
         # Send startup message to group
         startup_msg = "🚀 **AUTO-FORWARD BOT STARTED**\n"
@@ -164,13 +205,19 @@ async def initialize():
         startup_msg += "━━━━━━━━━━━━━━━━━━━━"
         
         await app.send_message(actual_group_id, startup_msg)
+        logger.info("✅ Startup message sent to group")
         
     except Exception as e:
-        logger.error(f"❌ Failed to join/access group: {e}")
-        logger.error("Make sure:")
-        logger.error("1. The invite link is correct")
-        logger.error("2. Your account has permission to join")
-        logger.error("3. You're the group owner/admin")
+        logger.error(f"❌ Failed to access group: {e}")
+        logger.error("\n🔧 QUICK FIX:")
+        logger.error(f"Current TARGET_GROUP: {TARGET_GROUP}")
+        logger.error("\nBest option: Use numeric ID")
+        logger.error("1. Run get_group_id.py to find your group's numeric ID")
+        logger.error("2. Set TARGET_GROUP to the number (e.g., -1002297717034)")
+        logger.error("\nAlternative: Shorten username")
+        logger.error("1. In Telegram: Group Settings → Edit → Username")
+        logger.error("2. Change to max 32 characters (e.g., 'logsbackup')")
+        logger.error("3. Then use: @logsbackup or https://t.me/logsbackup")
         sys.exit(1)
 
 if __name__ == "__main__":
