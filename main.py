@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 API_ID = os.getenv('API_ID')
 API_HASH = os.getenv('API_HASH')
 SESSION_STRING = os.getenv('SESSION_STRING')
+TARGET_GROUP = os.getenv('TARGET_GROUP', '-1002297717034')  # Your group chat ID
 
 # Validate environment variables
 if not API_ID or not API_HASH:
@@ -84,24 +85,25 @@ def get_user_info(user):
     return "\n".join(info_lines)
 
 @app.on_message(filters.private & filters.incoming & ~filters.me & ~filters.bot)
-async def forward_to_saved(client: Client, message: Message):
-    """Forward every incoming private message to Saved Messages with user info"""
+async def forward_to_group(client: Client, message: Message):
+    """Forward every incoming private message to the target group with user info"""
     try:
         user = message.from_user
         
         # Get detailed user info
         user_info = get_user_info(user)
         
-        # Send user info first
-        await client.send_message("me", user_info, disable_web_page_preview=False)
+        # Send user info first to the group
+        await client.send_message(TARGET_GROUP, user_info, disable_web_page_preview=False)
         
-        # Forward the actual message
-        await message.forward("me")
+        # Forward the actual message to the group
+        await message.forward(TARGET_GROUP)
         
-        logger.info(f"✅ Forwarded message from {user.first_name} (ID: {user.id}, Username: @{user.username or 'None'})")
+        logger.info(f"✅ Forwarded message from {user.first_name} (ID: {user.id}, Username: @{user.username or 'None'}) to group {TARGET_GROUP}")
         
     except Exception as e:
         logger.error(f"❌ Error forwarding message: {e}")
+        logger.error(f"   Make sure the bot account is a member of the group: {TARGET_GROUP}")
 
 @app.on_message(filters.private & filters.incoming & ~filters.me & filters.service)
 async def forward_service_messages(client: Client, message: Message):
@@ -110,17 +112,18 @@ async def forward_service_messages(client: Client, message: Message):
         user = message.from_user
         user_info = get_user_info(user)
         
-        await client.send_message("me", user_info + "\n📞 **Service Message**", disable_web_page_preview=False)
-        await message.forward("me")
+        await client.send_message(TARGET_GROUP, user_info + "\n📞 **Service Message**", disable_web_page_preview=False)
+        await message.forward(TARGET_GROUP)
         
-        logger.info(f"✅ Forwarded service message from {user.first_name} (ID: {user.id})")
+        logger.info(f"✅ Forwarded service message from {user.first_name} (ID: {user.id}) to group {TARGET_GROUP}")
         
     except Exception as e:
         logger.error(f"❌ Error forwarding service message: {e}")
+        logger.error(f"   Make sure the bot account is a member of the group: {TARGET_GROUP}")
 
 if __name__ == "__main__":
     logger.info("🚀 Starting Auto-Forward UserBot...")
-    logger.info("📨 All incoming messages will be forwarded to Saved Messages!")
+    logger.info(f"📨 All incoming messages will be forwarded to group: {TARGET_GROUP}")
     logger.info("✨ Enhanced with detailed user information and clickable profile links")
     
     try:
