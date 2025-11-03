@@ -1,0 +1,17 @@
+# Environment variables (NEVER commit these!)
+.env
+*.env
+.env.local
+
+# Session files
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
