@@ -143,7 +143,7 @@ async def initialize():
         target = TARGET_GROUP.strip()
         
         # Handle different formats
-        if target.startswith('-100') or target.lstrip('-').isdigit():
+        if target.startswith('-100') or (target.startswith('-') and target[1:].isdigit()):
             # Numeric ID (best option)
             actual_group_id = int(target)
             logger.info(f"🔗 Using numeric group ID: {actual_group_id}")
@@ -191,7 +191,14 @@ async def initialize():
             logger.info(f"✅ Found group: {chat.title}")
             
         else:
-            raise Exception(f"Invalid TARGET_GROUP format: {target}")
+            # Plain username without @ or https - add @ automatically
+            username = target
+            if len(username) > 32:
+                raise Exception(f"Username '{username}' is too long (max 32 chars). Shorten it in Telegram settings!")
+            logger.info(f"🔗 Accessing public group: @{username}")
+            chat = await app.get_chat(username)
+            actual_group_id = chat.id
+            logger.info(f"✅ Found group: {chat.title}")
         
         logger.info(f"📊 Group ID: {actual_group_id}")
         
@@ -214,10 +221,10 @@ async def initialize():
         logger.error("\nBest option: Use numeric ID")
         logger.error("1. Run get_group_id.py to find your group's numeric ID")
         logger.error("2. Set TARGET_GROUP to the number (e.g., -1002297717034)")
-        logger.error("\nAlternative: Shorten username")
+        logger.error("\nAlternative: Use username")
         logger.error("1. In Telegram: Group Settings → Edit → Username")
         logger.error("2. Change to max 32 characters (e.g., 'logsbackup')")
-        logger.error("3. Then use: @logsbackup or https://t.me/logsbackup")
+        logger.error("3. Then use: @logsbackup or https://t.me/logsbackup or just logsbackup")
         sys.exit(1)
 
 if __name__ == "__main__":
