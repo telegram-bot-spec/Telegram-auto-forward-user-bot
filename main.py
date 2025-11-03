@@ -3,6 +3,8 @@ import sys
 import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message
+from pyrogram.errors import FloodWait, UsernameInvalid, UsernameNotOccupied, ChannelPrivate
+import asyncio
 
 # Setup logging
 logging.basicConfig(
@@ -11,28 +13,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Get environment variables (NEVER hardcode these!)
+# Get environment variables
 API_ID = os.getenv('API_ID')
 API_HASH = os.getenv('API_HASH')
 SESSION_STRING = os.getenv('SESSION_STRING')
-
-# Your group username or ID
-# Use: @logsbackupofall OR https://t.me/logsbackupofall OR numeric ID
 TARGET_GROUP = os.getenv('TARGET_GROUP', '@logsbackupofall')
 
 # Validate environment variables
-if not API_ID or not API_HASH or not SESSION_STRING:
-    logger.error("❌ ERROR: Required environment variables are missing!")
-    logger.error("Please set: API_ID, API_HASH, SESSION_STRING")
+if not all([API_ID, API_HASH, SESSION_STRING]):
+    logger.error("❌ ERROR: Missing required environment variables!")
+    logger.error("\nRequired variables:")
+    logger.error("  - API_ID (get from https://my.telegram.org)")
+    logger.error("  - API_HASH (get from https://my.telegram.org)")
+    logger.error("  - SESSION_STRING (generate using session generator)")
+    logger.error("  - TARGET_GROUP (your group @username)")
     logger.error("\nFor Railway deployment:")
-    logger.error("1. Go to your Railway project")
-    logger.error("2. Click on 'Variables' tab")
-    logger.error("3. Add these variables with your values")
+    logger.error("  1. Go to your Railway project")
+    logger.error("  2. Click 'Variables' tab")
+    logger.error("  3. Add all variables above")
     sys.exit(1)
 
-# Validate SESSION_STRING format
+# Validate SESSION_STRING
 if len(SESSION_STRING) < 100:
     logger.error("❌ ERROR: SESSION_STRING appears invalid (too short)")
+    logger.error("Generate a new session string using Pyrogram's session generator")
     sys.exit(1)
 
 # Create client
@@ -44,211 +48,283 @@ try:
         session_string=SESSION_STRING
     )
     logger.info("✅ Client created successfully")
-except ValueError:
-    logger.error("❌ ERROR: API_ID must be a number")
+except ValueError as e:
+    logger.error(f"❌ ERROR: API_ID must be a valid number: {e}")
     sys.exit(1)
 except Exception as e:
     logger.error(f"❌ Failed to create client: {e}")
     sys.exit(1)
 
-# Store the actual chat ID after joining
-actual_group_id = None
+# Global variable for group chat ID
+target_chat_id = None
 
-@app.on_message(filters.private & filters.incoming & ~filters.me & ~filters.bot)
+
+def clean_username(username: str) -> str:
+    """Clean and normalize username"""
+    username = username.strip()
+    # Remove common prefixes
+    if username.startswith('https://t.me/'):
+        username = username.replace('https://t.me/', '')
+    if username.startswith('@'):
+        username = username[1:]
+    # Remove any trailing slashes
+    username = username.rstrip('/')
+    return username
+
+
+async def resolve_target_group():
+    """Resolve target group and return chat ID"""
+    global target_chat_id
+    
+    try:
+        target = TARGET_GROUP.strip()
+        logger.info(f"🔍 Resolving target: {target}")
+        
+        # Case 1: Already a numeric ID
+        if target.lstrip('-').isdigit():
+            target_chat_id = int(target)
+            logger.info(f"✅ Using numeric ID: {target_chat_id}")
+            
+            # Verify access
+            try:
+                chat = await app.get_chat(target_chat_id)
+                logger.info(f"✅ Verified group: {chat.title}")
+                return target_chat_id
+            except Exception as e:
+                logger.error(f"❌ Cannot access group with ID {target_chat_id}: {e}")
+                raise
+        
+        # Case 2: Private invite link
+        elif 'https://t.me/+' in target or 'https://t.me/joinchat/' in target:
+            logger.info("🔗 Detected private invite link")
+            try:
+                chat = await app.join_chat(target)
+                target_chat_id = chat.id
+                logger.info(f"✅ Joined group: {chat.title} (ID: {target_chat_id})")
+                return target_chat_id
+            except Exception as e:
+                logger.error(f"❌ Failed to join via invite link: {e}")
+                raise
+        
+        # Case 3: Username (with or without @)
+        else:
+            username = clean_username(target)
+            
+            if len(username) > 32:
+                logger.error(f"❌ Username too long: '{username}' ({len(username)} chars)")
+                logger.error("Telegram usernames must be ≤32 characters")
+                raise ValueError("Username exceeds 32 character limit")
+            
+            if not username:
+                raise ValueError("Empty username after cleaning")
+            
+            logger.info(f"🔍 Looking up username: @{username}")
+            
+            try:
+                chat = await app.get_chat(username)
+                target_chat_id = chat.id
+                logger.info(f"✅ Found group: {chat.title} (ID: {target_chat_id})")
+                return target_chat_id
+            except UsernameInvalid:
+                logger.error(f"❌ Invalid username: @{username}")
+                raise
+            except UsernameNotOccupied:
+                logger.error(f"❌ Username not found: @{username}")
+                logger.error("Make sure the group has a public username set")
+                raise
+            except ChannelPrivate:
+                logger.error(f"❌ Group is private. Use invite link or join manually first")
+                raise
+            except Exception as e:
+                logger.error(f"❌ Error looking up username: {e}")
+                raise
+    
+    except Exception as e:
+        logger.error(f"\n{'='*60}")
+        logger.error("❌ FAILED TO ACCESS TARGET GROUP")
+        logger.error(f"{'='*60}")
+        logger.error(f"Error: {e}")
+        logger.error(f"\n📋 Current TARGET_GROUP: {TARGET_GROUP}")
+        logger.error("\n✅ SOLUTIONS:")
+        logger.error("\n1. Use Group Username (EASIEST):")
+        logger.error("   - Open group in Telegram")
+        logger.error("   - Go to: Group Info → Edit → Username")
+        logger.error("   - Set a username (max 32 chars)")
+        logger.error("   - Set TARGET_GROUP=@yourusername")
+        logger.error("\n2. Use Group ID:")
+        logger.error("   - Forward any message from the group to @userinfobot")
+        logger.error("   - Copy the chat ID (e.g., -1001234567890)")
+        logger.error("   - Set TARGET_GROUP=-1001234567890")
+        logger.error("\n3. Use Private Invite Link:")
+        logger.error("   - Get group invite link: Group Info → Invite Link")
+        logger.error("   - Set TARGET_GROUP=https://t.me/+xxxxx")
+        logger.error(f"{'='*60}\n")
+        raise
+
+
+@app.on_message(filters.private & filters.incoming & ~filters.me)
 async def forward_private_messages(client: Client, message: Message):
-    """
-    Auto-forward EVERY incoming private message to the target group
-    This catches messages INSTANTLY before they can be deleted!
-    """
-    global actual_group_id
+    """Forward ALL incoming private messages to target group"""
+    
+    if target_chat_id is None:
+        logger.error("❌ Target chat ID not initialized!")
+        return
     
     try:
         user = message.from_user
+        
+        # Handle service messages differently
+        if message.service:
+            await forward_service_message(client, message)
+            return
         
         # Build user info
         first_name = user.first_name or ""
         last_name = user.last_name or ""
-        full_name = f"{first_name} {last_name}".strip()
+        full_name = f"{first_name} {last_name}".strip() or "Unknown"
         username = f"@{user.username}" if user.username else "No username"
         user_id = user.id
         
-        # Create detailed info message
-        info_lines = []
-        info_lines.append("🔔 **NEW MESSAGE RECEIVED**")
-        info_lines.append("━━━━━━━━━━━━━━━━━━━━")
-        info_lines.append(f"👤 **From:** {full_name}")
-        info_lines.append(f"🆔 **User ID:** `{user_id}`")
-        info_lines.append(f"📝 **Username:** {username}")
+        # Create info message
+        info_parts = [
+            "🔔 **NEW MESSAGE RECEIVED**",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"👤 **From:** {full_name}",
+            f"🆔 **User ID:** `{user_id}`",
+            f"📝 **Username:** {username}",
+        ]
         
+        # Add profile link
         if user.username:
-            info_lines.append(f"🔗 **Profile:** https://t.me/{user.username}")
+            info_parts.append(f"🔗 **Profile:** https://t.me/{user.username}")
         else:
-            info_lines.append(f"🔗 **Profile:** tg://user?id={user_id}")
+            info_parts.append(f"🔗 **Profile:** tg://user?id={user_id}")
         
+        # Add badges
         if user.is_verified:
-            info_lines.append("✅ **Verified Account**")
+            info_parts.append("✅ **Verified Account**")
         if user.is_premium:
-            info_lines.append("⭐ **Premium User**")
+            info_parts.append("⭐ **Premium User**")
         if user.is_bot:
-            info_lines.append("🤖 **Bot Account**")
+            info_parts.append("🤖 **Bot Account**")
         
-        info_lines.append("━━━━━━━━━━━━━━━━━━━━")
+        info_parts.append("━━━━━━━━━━━━━━━━━━━━")
         
-        user_info = "\n".join(info_lines)
+        user_info = "\n".join(info_parts)
         
-        # Send user info first
-        await client.send_message(actual_group_id, user_info, disable_web_page_preview=False)
+        # Send info message
+        await client.send_message(
+            target_chat_id,
+            user_info,
+            disable_web_page_preview=True
+        )
         
-        # Forward the actual message immediately
-        await message.forward(actual_group_id)
+        # Forward the actual message
+        await message.forward(target_chat_id)
         
-        logger.info(f"✅ FORWARDED: {full_name} ({username}) | User ID: {user_id}")
+        logger.info(f"✅ Forwarded from: {full_name} (@{user.username or 'none'}) | ID: {user_id}")
         
+    except FloodWait as e:
+        logger.warning(f"⏳ FloodWait: Sleeping for {e.value} seconds")
+        await asyncio.sleep(e.value)
+        # Retry
+        await forward_private_messages(client, message)
     except Exception as e:
-        logger.error(f"❌ Failed to forward message: {e}")
-        logger.error(f"   From: {user.first_name if user else 'Unknown'}")
+        logger.error(f"❌ Forward failed: {e}")
+        try:
+            logger.error(f"   User: {user.first_name if user else 'Unknown'}")
+        except:
+            pass
 
-@app.on_message(filters.private & filters.incoming & ~filters.me & filters.service)
-async def forward_service_messages(client: Client, message: Message):
-    """
-    Also forward service messages (calls, voice chats, etc.)
-    """
-    global actual_group_id
+
+async def forward_service_message(client: Client, message: Message):
+    """Forward service messages (calls, video chats, etc.)"""
     
     try:
         user = message.from_user
         
         first_name = user.first_name or ""
         last_name = user.last_name or ""
-        full_name = f"{first_name} {last_name}".strip()
+        full_name = f"{first_name} {last_name}".strip() or "Unknown"
         username = f"@{user.username}" if user.username else "No username"
         
-        service_info = f"📞 **SERVICE MESSAGE**\n"
-        service_info += f"👤 From: {full_name} ({username})\n"
-        service_info += f"🆔 User ID: `{user.id}`"
+        service_info = (
+            f"📞 **SERVICE MESSAGE**\n"
+            f"👤 **From:** {full_name} ({username})\n"
+            f"🆔 **User ID:** `{user.id}`"
+        )
         
-        await client.send_message(actual_group_id, service_info)
-        await message.forward(actual_group_id)
+        await client.send_message(target_chat_id, service_info)
+        await message.forward(target_chat_id)
         
-        logger.info(f"✅ FORWARDED SERVICE: {full_name} ({username})")
+        logger.info(f"✅ Forwarded service message from: {full_name}")
         
     except Exception as e:
-        logger.error(f"❌ Failed to forward service message: {e}")
+        logger.error(f"❌ Service message forward failed: {e}")
 
-async def initialize():
-    """Initialize and access the target group"""
-    global actual_group_id
-    
+
+async def send_startup_message():
+    """Send startup notification to group"""
     try:
-        target = TARGET_GROUP.strip()
+        startup_msg = (
+            "🚀 **AUTO-FORWARD BOT STARTED**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ Bot is now ONLINE\n"
+            "📱 All incoming private messages will be forwarded here\n"
+            "⚡ Messages captured INSTANTLY\n"
+            "🛡️ Even deleted messages will be saved\n"
+            "━━━━━━━━━━━━━━━━━━━━"
+        )
         
-        # Handle different formats
-        if target.startswith('-100') or (target.startswith('-') and target[1:].isdigit()):
-            # Numeric ID (best option)
-            actual_group_id = int(target)
-            logger.info(f"🔗 Using numeric group ID: {actual_group_id}")
-            chat = await app.get_chat(actual_group_id)
-            logger.info(f"✅ Accessed group: {chat.title}")
-            
-        elif target.startswith('https://t.me/+'):
-            # Private invite link
-            logger.info(f"🔗 Joining private group via invite link...")
-            try:
-                chat = await app.join_chat(target)
-                actual_group_id = chat.id
-                logger.info(f"✅ Joined group: {chat.title}")
-            except Exception as join_error:
-                logger.info(f"⚠️ Could not join: {join_error}")
-                logger.info("🔍 Searching your existing chats...")
-                
-                async for dialog in app.get_dialogs():
-                    if dialog.chat.invite_link and target in str(dialog.chat.invite_link):
-                        chat = dialog.chat
-                        actual_group_id = chat.id
-                        logger.info(f"✅ Found group: {chat.title}")
-                        break
-                else:
-                    raise Exception("Group not found. Join manually first!")
-                    
-        elif target.startswith('https://t.me/'):
-            # Public link - extract username
-            username = target.split('/')[-1]
-            if len(username) > 32:
-                raise Exception(f"Username '{username}' is too long (max 32 chars). Shorten it in Telegram settings!")
-            logger.info(f"🔗 Accessing public group: @{username}")
-            chat = await app.get_chat(username)
-            actual_group_id = chat.id
-            logger.info(f"✅ Found group: {chat.title}")
-            
-        elif target.startswith('@'):
-            # Username format
-            username = target[1:]  # Remove @
-            if len(username) > 32:
-                raise Exception(f"Username '{username}' is too long (max 32 chars). Shorten it in Telegram settings!")
-            logger.info(f"🔗 Accessing public group: @{username}")
-            chat = await app.get_chat(username)
-            actual_group_id = chat.id
-            logger.info(f"✅ Found group: {chat.title}")
-            
-        else:
-            # Plain username without @ or https - add @ automatically
-            username = target
-            if len(username) > 32:
-                raise Exception(f"Username '{username}' is too long (max 32 chars). Shorten it in Telegram settings!")
-            logger.info(f"🔗 Accessing public group: @{username}")
-            chat = await app.get_chat(username)
-            actual_group_id = chat.id
-            logger.info(f"✅ Found group: {chat.title}")
-        
-        logger.info(f"📊 Group ID: {actual_group_id}")
-        
-        # Send startup message to group
-        startup_msg = "🚀 **AUTO-FORWARD BOT STARTED**\n"
-        startup_msg += "━━━━━━━━━━━━━━━━━━━━\n"
-        startup_msg += "✅ Bot is now ONLINE\n"
-        startup_msg += "📱 All incoming private messages will be forwarded here\n"
-        startup_msg += "⚡ Messages are captured INSTANTLY\n"
-        startup_msg += "🛡️ Even deleted messages will be saved here\n"
-        startup_msg += "━━━━━━━━━━━━━━━━━━━━"
-        
-        await app.send_message(actual_group_id, startup_msg)
-        logger.info("✅ Startup message sent to group")
-        
+        await app.send_message(target_chat_id, startup_msg)
+        logger.info("✅ Startup notification sent")
     except Exception as e:
-        logger.error(f"❌ Failed to access group: {e}")
-        logger.error("\n🔧 QUICK FIX:")
-        logger.error(f"Current TARGET_GROUP: {TARGET_GROUP}")
-        logger.error("\nBest option: Use numeric ID")
-        logger.error("1. Run get_group_id.py to find your group's numeric ID")
-        logger.error("2. Set TARGET_GROUP to the number (e.g., -1002297717034)")
-        logger.error("\nAlternative: Use username")
-        logger.error("1. In Telegram: Group Settings → Edit → Username")
-        logger.error("2. Change to max 32 characters (e.g., 'logsbackup')")
-        logger.error("3. Then use: @logsbackup or https://t.me/logsbackup or just logsbackup")
-        sys.exit(1)
+        logger.warning(f"⚠️ Could not send startup message: {e}")
 
-if __name__ == "__main__":
+
+async def main():
+    """Main async function"""
+    global target_chat_id
+    
     logger.info("=" * 60)
     logger.info("🚀 TELEGRAM AUTO-FORWARD BOT")
     logger.info("=" * 60)
-    logger.info("📱 Mode: LIVE FORWARDING (New messages only)")
+    logger.info("📱 Mode: LIVE FORWARDING")
     logger.info("🎯 Target: All incoming private messages")
     logger.info(f"📊 Forward to: {TARGET_GROUP}")
     logger.info("⚡ Speed: INSTANT (before deletion)")
     logger.info("=" * 60)
     
+    await app.start()
+    logger.info("✅ Client started")
+    
+    # Resolve target group
     try:
-        # Start the client with initialization
-        with app:
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(initialize())
-            logger.info("\n✅ Bot is running! Press Ctrl+C to stop.\n")
-            app.run()
-            
+        await resolve_target_group()
+    except Exception as e:
+        logger.error("❌ Cannot continue without valid target group")
+        await app.stop()
+        sys.exit(1)
+    
+    # Send startup message
+    await send_startup_message()
+    
+    logger.info("\n" + "=" * 60)
+    logger.info("✅ BOT IS RUNNING!")
+    logger.info("=" * 60)
+    logger.info("Press Ctrl+C to stop\n")
+    
+    # Keep running
+    await asyncio.Event().wait()
+
+
+if __name__ == "__main__":
+    try:
+        app.run(main())
     except KeyboardInterrupt:
         logger.info("\n🛑 Bot stopped by user")
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
+        logger.error(f"\n❌ Fatal error: {e}")
         import traceback
         logger.error(traceback.format_exc())
         sys.exit(1)
