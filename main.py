@@ -104,7 +104,21 @@ async def resolve_target_group():
                 return target_chat_id
             except Exception as e:
                 logger.error(f"❌ Failed to join via invite link: {e}")
-                raise
+                logger.info("🔍 Checking if already a member...")
+                
+                # Search in existing dialogs
+                try:
+                    async for dialog in app.get_dialogs():
+                        if dialog.chat.type in ["group", "supergroup"]:
+                            if hasattr(dialog.chat, 'invite_link') and dialog.chat.invite_link:
+                                if target in str(dialog.chat.invite_link):
+                                    target_chat_id = dialog.chat.id
+                                    logger.info(f"✅ Found group: {dialog.chat.title} (ID: {target_chat_id})")
+                                    return target_chat_id
+                except Exception as search_error:
+                    logger.warning(f"⚠️ Search error: {search_error}")
+                
+                raise Exception("Could not join or find group. Join manually first, then use group ID or username.")
         
         # Case 3: Username (with or without @)
         else:
@@ -173,23 +187,28 @@ async def forward_private_messages(client: Client, message: Message):
     try:
         user = message.from_user
         
+        # Check if user exists (for very rare edge cases)
+        if not user:
+            logger.warning("⚠️ Received message with no user info")
+            return
+        
         # Handle service messages differently
         if message.service:
             await forward_service_message(client, message)
             return
         
-        # Build user info
-        first_name = user.first_name or ""
-        last_name = user.last_name or ""
+        # Build user info - escape markdown special characters in names
+        first_name = (user.first_name or "").replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)')
+        last_name = (user.last_name or "").replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)')
         full_name = f"{first_name} {last_name}".strip() or "Unknown"
         username = f"@{user.username}" if user.username else "No username"
         user_id = user.id
         
-        # Create info message
+        # Create info message with clickable mention
         info_parts = [
             "🔔 **NEW MESSAGE RECEIVED**",
             "━━━━━━━━━━━━━━━━━━━━",
-            f"👤 **From:** {full_name}",
+            f"👤 **From:** [{full_name}](tg://user?id={user_id})",  # Clickable mention
             f"🆔 **User ID:** `{user_id}`",
             f"📝 **Username:** {username}",
         ]
@@ -198,7 +217,7 @@ async def forward_private_messages(client: Client, message: Message):
         if user.username:
             info_parts.append(f"🔗 **Profile:** https://t.me/{user.username}")
         else:
-            info_parts.append(f"🔗 **Profile:** tg://user?id={user_id}")
+            info_parts.append(f"🔗 **Profile:** [Click to open profile](tg://user?id={user_id})")
         
         # Add badges
         if user.is_verified:
@@ -232,7 +251,8 @@ async def forward_private_messages(client: Client, message: Message):
     except Exception as e:
         logger.error(f"❌ Forward failed: {e}")
         try:
-            logger.error(f"   User: {user.first_name if user else 'Unknown'}")
+            if user:
+                logger.error(f"   User: {user.first_name or 'Unknown'} (ID: {user.id})")
         except:
             pass
 
@@ -243,14 +263,20 @@ async def forward_service_message(client: Client, message: Message):
     try:
         user = message.from_user
         
-        first_name = user.first_name or ""
-        last_name = user.last_name or ""
+        if not user:
+            logger.warning("⚠️ Service message with no user info")
+            return
+        
+        # Escape markdown special characters
+        first_name = (user.first_name or "").replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)')
+        last_name = (user.last_name or "").replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)')
         full_name = f"{first_name} {last_name}".strip() or "Unknown"
         username = f"@{user.username}" if user.username else "No username"
         
+        # Clickable mention for service messages too
         service_info = (
             f"📞 **SERVICE MESSAGE**\n"
-            f"👤 **From:** {full_name} ({username})\n"
+            f"👤 **From:** [{full_name}](tg://user?id={user.id}) ({username})\n"
             f"🆔 **User ID:** `{user.id}`"
         )
         
@@ -261,11 +287,20 @@ async def forward_service_message(client: Client, message: Message):
         
     except Exception as e:
         logger.error(f"❌ Service message forward failed: {e}")
+        try:
+            if user:
+                logger.error(f"   User ID: {user.id}")
+        except:
+            pass
 
 
 async def send_startup_message():
     """Send startup notification to group"""
     try:
+        if target_chat_id is None:
+            logger.warning("⚠️ Cannot send startup message: target_chat_id is None")
+            return
+            
         startup_msg = (
             "🚀 **AUTO-FORWARD BOT STARTED**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -295,15 +330,23 @@ async def main():
     logger.info("⚡ Speed: INSTANT (before deletion)")
     logger.info("=" * 60)
     
-    await app.start()
-    logger.info("✅ Client started")
+    try:
+        await app.start()
+        logger.info("✅ Client started")
+    except Exception as e:
+        logger.error(f"❌ Failed to start client: {e}")
+        logger.error("Check your SESSION_STRING, API_ID, and API_HASH")
+        raise
     
     # Resolve target group
     try:
         await resolve_target_group()
     except Exception as e:
         logger.error("❌ Cannot continue without valid target group")
-        await app.stop()
+        try:
+            await app.stop()
+        except:
+            pass
         sys.exit(1)
     
     # Send startup message
@@ -314,8 +357,12 @@ async def main():
     logger.info("=" * 60)
     logger.info("Press Ctrl+C to stop\n")
     
-    # Keep running
-    await asyncio.Event().wait()
+    # Keep running until interrupted
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        logger.info("🛑 Shutting down gracefully...")
+        raise
 
 
 if __name__ == "__main__":
