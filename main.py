@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -15,13 +16,36 @@ API_ID = os.getenv('API_ID')
 API_HASH = os.getenv('API_HASH')
 SESSION_STRING = os.getenv('SESSION_STRING')
 
+# Validate environment variables
+if not API_ID or not API_HASH:
+    logger.error("❌ ERROR: API_ID and API_HASH environment variables are required!")
+    logger.error("Please set them in your environment.")
+    sys.exit(1)
+
+if not SESSION_STRING:
+    logger.error("❌ ERROR: SESSION_STRING environment variable is required!")
+    logger.error("Generate one using the generate_session.py script")
+    sys.exit(1)
+
+# Validate SESSION_STRING format
+if len(SESSION_STRING) < 100:
+    logger.error("❌ ERROR: SESSION_STRING appears to be too short (corrupted)!")
+    logger.error(f"Current length: {len(SESSION_STRING)} characters")
+    logger.error("Please regenerate your session string using generate_session.py")
+    sys.exit(1)
+
 # Create client
-app = Client(
-    "auto_forward_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION_STRING
-)
+try:
+    app = Client(
+        "auto_forward_bot",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        session_string=SESSION_STRING
+    )
+    logger.info("✅ Client created successfully")
+except Exception as e:
+    logger.error(f"❌ Failed to create client: {e}")
+    sys.exit(1)
 
 def get_user_info(user):
     """Generate detailed user information with clickable links"""
@@ -98,4 +122,12 @@ if __name__ == "__main__":
     logger.info("🚀 Starting Auto-Forward UserBot...")
     logger.info("📨 All incoming messages will be forwarded to Saved Messages!")
     logger.info("✨ Enhanced with detailed user information and clickable profile links")
-    app.run()
+    
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot stopped by user")
+    except Exception as e:
+        logger.error(f"❌ Fatal error: {e}")
+        logger.error("If you see 'struct.error' or session errors, regenerate your SESSION_STRING")
+        sys.exit(1)
