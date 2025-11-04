@@ -4,6 +4,7 @@ import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.errors import FloodWait, UsernameInvalid, UsernameNotOccupied, ChannelPrivate
+from pyrogram.enums import ParseMode
 import asyncio
 
 # Setup logging
@@ -197,44 +198,46 @@ async def forward_private_messages(client: Client, message: Message):
             await forward_service_message(client, message)
             return
         
-        # Build user info - escape markdown special characters in names
-        first_name = (user.first_name or "").replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)')
-        last_name = (user.last_name or "").replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)')
+        # Build user info - HTML escape special characters
+        import html
+        first_name = html.escape(user.first_name or "")
+        last_name = html.escape(user.last_name or "")
         full_name = f"{first_name} {last_name}".strip() or "Unknown"
         username = f"@{user.username}" if user.username else "No username"
         user_id = user.id
         
-        # Create info message with clickable mention
+        # Create info message with HTML formatting for clickable mention
         info_parts = [
-            "🔔 **NEW MESSAGE RECEIVED**",
+            "🔔 <b>NEW MESSAGE RECEIVED</b>",
             "━━━━━━━━━━━━━━━━━━━━",
-            f"👤 **From:** [{full_name}](tg://user?id={user_id})",  # Clickable mention
-            f"🆔 **User ID:** `{user_id}`",
-            f"📝 **Username:** {username}",
+            f"👤 <b>From:</b> <a href='tg://user?id={user_id}'>{full_name}</a>",
+            f"🆔 <b>User ID:</b> <code>{user_id}</code>",
+            f"📝 <b>Username:</b> {username}",
         ]
         
         # Add profile link
         if user.username:
-            info_parts.append(f"🔗 **Profile:** https://t.me/{user.username}")
+            info_parts.append(f"🔗 <b>Profile:</b> https://t.me/{user.username}")
         else:
-            info_parts.append(f"🔗 **Profile:** [Click to open profile](tg://user?id={user_id})")
+            info_parts.append(f"🔗 <b>Profile:</b> <a href='tg://user?id={user_id}'>Click to open profile</a>")
         
         # Add badges
         if user.is_verified:
-            info_parts.append("✅ **Verified Account**")
+            info_parts.append("✅ <b>Verified Account</b>")
         if user.is_premium:
-            info_parts.append("⭐ **Premium User**")
+            info_parts.append("⭐ <b>Premium User</b>")
         if user.is_bot:
-            info_parts.append("🤖 **Bot Account**")
+            info_parts.append("🤖 <b>Bot Account</b>")
         
         info_parts.append("━━━━━━━━━━━━━━━━━━━━")
         
         user_info = "\n".join(info_parts)
         
-        # Send info message
+        # Send info message with HTML parse mode
         await client.send_message(
             target_chat_id,
             user_info,
+            parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
         )
         
@@ -267,20 +270,25 @@ async def forward_service_message(client: Client, message: Message):
             logger.warning("⚠️ Service message with no user info")
             return
         
-        # Escape markdown special characters
-        first_name = (user.first_name or "").replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)')
-        last_name = (user.last_name or "").replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)')
+        # HTML escape special characters
+        import html
+        first_name = html.escape(user.first_name or "")
+        last_name = html.escape(user.last_name or "")
         full_name = f"{first_name} {last_name}".strip() or "Unknown"
         username = f"@{user.username}" if user.username else "No username"
         
-        # Clickable mention for service messages too
+        # Clickable mention for service messages with HTML
         service_info = (
-            f"📞 **SERVICE MESSAGE**\n"
-            f"👤 **From:** [{full_name}](tg://user?id={user.id}) ({username})\n"
-            f"🆔 **User ID:** `{user.id}`"
+            f"📞 <b>SERVICE MESSAGE</b>\n"
+            f"👤 <b>From:</b> <a href='tg://user?id={user.id}'>{full_name}</a> ({username})\n"
+            f"🆔 <b>User ID:</b> <code>{user.id}</code>"
         )
         
-        await client.send_message(target_chat_id, service_info)
+        await client.send_message(
+            target_chat_id,
+            service_info,
+            parse_mode=ParseMode.HTML
+        )
         await message.forward(target_chat_id)
         
         logger.info(f"✅ Forwarded service message from: {full_name}")
@@ -302,7 +310,7 @@ async def send_startup_message():
             return
             
         startup_msg = (
-            "🚀 **AUTO-FORWARD BOT STARTED**\n"
+            "🚀 <b>AUTO-FORWARD BOT STARTED</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "✅ Bot is now ONLINE\n"
             "📱 All incoming private messages will be forwarded here\n"
@@ -311,7 +319,11 @@ async def send_startup_message():
             "━━━━━━━━━━━━━━━━━━━━"
         )
         
-        await app.send_message(target_chat_id, startup_msg)
+        await app.send_message(
+            target_chat_id,
+            startup_msg,
+            parse_mode=ParseMode.HTML
+        )
         logger.info("✅ Startup notification sent")
     except Exception as e:
         logger.warning(f"⚠️ Could not send startup message: {e}")
