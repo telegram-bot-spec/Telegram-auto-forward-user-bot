@@ -203,23 +203,24 @@ async def forward_private_messages(client: Client, message: Message):
         first_name = html_escape(user.first_name or "")
         last_name = html_escape(user.last_name or "")
         full_name = f"{first_name} {last_name}".strip() or "Unknown"
-        username = f"@{user.username}" if user.username else "No username"
+        username_display = f"@{user.username}" if user.username else "No username"
         user_id = user.id
         
-        # Create info message with HTML formatting for clickable mention
+        # Create clickable name using text mention
+        mention_link = f'<a href="tg://user?id={user_id}">{full_name}</a>'
+        
+        # Create info message with HTML formatting
         info_parts = [
             "🔔 <b>NEW MESSAGE RECEIVED</b>",
             "━━━━━━━━━━━━━━━━━━━━",
-            f"👤 <b>From:</b> <a href='tg://user?id={user_id}'>{full_name}</a>",
+            f"👤 <b>From:</b> {mention_link}",
             f"🆔 <b>User ID:</b> <code>{user_id}</code>",
-            f"📝 <b>Username:</b> {username}",
+            f"📝 <b>Username:</b> {username_display}",
         ]
         
         # Add profile link
         if user.username:
             info_parts.append(f"🔗 <b>Profile:</b> https://t.me/{user.username}")
-        else:
-            info_parts.append(f"🔗 <b>Profile:</b> <a href='tg://user?id={user_id}'>Click to open profile</a>")
         
         # Add badges
         if user.is_verified:
@@ -274,12 +275,15 @@ async def forward_service_message(client: Client, message: Message):
         first_name = html_escape(user.first_name or "")
         last_name = html_escape(user.last_name or "")
         full_name = f"{first_name} {last_name}".strip() or "Unknown"
-        username = f"@{user.username}" if user.username else "No username"
+        username_display = f"@{user.username}" if user.username else "No username"
+        
+        # Create clickable name
+        mention_link = f'<a href="tg://user?id={user.id}">{full_name}</a>'
         
         # Clickable mention for service messages with HTML
         service_info = (
             f"📞 <b>SERVICE MESSAGE</b>\n"
-            f"👤 <b>From:</b> <a href='tg://user?id={user.id}'>{full_name}</a> ({username})\n"
+            f"👤 <b>From:</b> {mention_link} ({username_display})\n"
             f"🆔 <b>User ID:</b> <code>{user.id}</code>"
         )
         
