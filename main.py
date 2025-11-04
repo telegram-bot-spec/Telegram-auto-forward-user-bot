@@ -2,11 +2,10 @@ import os
 import sys
 import logging
 import asyncio
-from html import escape as html_escape
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, MessageEntity
+from pyrogram.enums import MessageEntityType
 from pyrogram.errors import FloodWait, UsernameInvalid, UsernameNotOccupied, ChannelPrivate
-from pyrogram.enums import ParseMode
 
 # Setup logging
 logging.basicConfig(
@@ -199,46 +198,62 @@ async def forward_private_messages(client: Client, message: Message):
             await forward_service_message(client, message)
             return
         
-        # Build user info - HTML escape special characters
-        first_name = html_escape(user.first_name or "")
-        last_name = html_escape(user.last_name or "")
+        # Build user info
+        first_name = user.first_name or ""
+        last_name = user.last_name or ""
         full_name = f"{first_name} {last_name}".strip() or "Unknown"
         username_display = f"@{user.username}" if user.username else "No username"
         user_id = user.id
         
-        # Create clickable name using text mention
-        mention_link = f'<a href="tg://user?id={user_id}">{full_name}</a>'
-        
-        # Create info message with HTML formatting
-        info_parts = [
-            "🔔 <b>NEW MESSAGE RECEIVED</b>",
+        # Create message text without HTML tags (plain text)
+        text_parts = [
+            "🔔 NEW MESSAGE RECEIVED",
             "━━━━━━━━━━━━━━━━━━━━",
-            f"👤 <b>From:</b> {mention_link}",
-            f"🆔 <b>User ID:</b> <code>{user_id}</code>",
-            f"📝 <b>Username:</b> {username_display}",
+            f"👤 From: {full_name}",
+            f"🆔 User ID: {user_id}",
+            f"📝 Username: {username_display}",
         ]
         
-        # Add profile link
+        # Add profile link for users with username
         if user.username:
-            info_parts.append(f"🔗 <b>Profile:</b> https://t.me/{user.username}")
+            text_parts.append(f"🔗 Profile: https://t.me/{user.username}")
         
         # Add badges
         if user.is_verified:
-            info_parts.append("✅ <b>Verified Account</b>")
+            text_parts.append("✅ Verified Account")
         if user.is_premium:
-            info_parts.append("⭐ <b>Premium User</b>")
+            text_parts.append("⭐ Premium User")
         if user.is_bot:
-            info_parts.append("🤖 <b>Bot Account</b>")
+            text_parts.append("🤖 Bot Account")
         
-        info_parts.append("━━━━━━━━━━━━━━━━━━━━")
+        text_parts.append("━━━━━━━━━━━━━━━━━━━━")
         
-        user_info = "\n".join(info_parts)
+        message_text = "\n".join(text_parts)
         
-        # Send info message with HTML parse mode
+        # Create text mention entity for clickable name
+        try:
+            from_line = f"👤 From: {full_name}"
+            name_start = message_text.index(from_line) + len("👤 From: ")
+            name_length = len(full_name)
+            
+            entities = [
+                MessageEntity(
+                    type=MessageEntityType.TEXT_MENTION,
+                    offset=name_start,
+                    length=name_length,
+                    user=user
+                )
+            ]
+        except (ValueError, AttributeError) as entity_error:
+            # If entity creation fails, send without entities
+            logger.warning(f"⚠️ Could not create text mention entity: {entity_error}")
+            entities = None
+        
+        # Send message with entities (this makes the name clickable)
         await client.send_message(
             target_chat_id,
-            user_info,
-            parse_mode=ParseMode.HTML,
+            message_text,
+            entities=entities,
             disable_web_page_preview=True
         )
         
@@ -271,26 +286,41 @@ async def forward_service_message(client: Client, message: Message):
             logger.warning("⚠️ Service message with no user info")
             return
         
-        # HTML escape special characters
-        first_name = html_escape(user.first_name or "")
-        last_name = html_escape(user.last_name or "")
+        # Build user info
+        first_name = user.first_name or ""
+        last_name = user.last_name or ""
         full_name = f"{first_name} {last_name}".strip() or "Unknown"
         username_display = f"@{user.username}" if user.username else "No username"
         
-        # Create clickable name
-        mention_link = f'<a href="tg://user?id={user.id}">{full_name}</a>'
-        
-        # Clickable mention for service messages with HTML
-        service_info = (
-            f"📞 <b>SERVICE MESSAGE</b>\n"
-            f"👤 <b>From:</b> {mention_link} ({username_display})\n"
-            f"🆔 <b>User ID:</b> <code>{user.id}</code>"
+        # Create plain text message
+        message_text = (
+            f"📞 SERVICE MESSAGE\n"
+            f"👤 From: {full_name} ({username_display})\n"
+            f"🆔 User ID: {user.id}"
         )
+        
+        # Create text mention entity for clickable name
+        try:
+            from_line = f"👤 From: {full_name}"
+            name_start = message_text.index(from_line) + len("👤 From: ")
+            name_length = len(full_name)
+            
+            entities = [
+                MessageEntity(
+                    type=MessageEntityType.TEXT_MENTION,
+                    offset=name_start,
+                    length=name_length,
+                    user=user
+                )
+            ]
+        except (ValueError, AttributeError) as entity_error:
+            logger.warning(f"⚠️ Could not create text mention entity: {entity_error}")
+            entities = None
         
         await client.send_message(
             target_chat_id,
-            service_info,
-            parse_mode=ParseMode.HTML
+            message_text,
+            entities=entities
         )
         await message.forward(target_chat_id)
         
@@ -313,7 +343,7 @@ async def send_startup_message():
             return
             
         startup_msg = (
-            "🚀 <b>AUTO-FORWARD BOT STARTED</b>\n"
+            "🚀 AUTO-FORWARD BOT STARTED\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "✅ Bot is now ONLINE\n"
             "📱 All incoming private messages will be forwarded here\n"
@@ -322,11 +352,7 @@ async def send_startup_message():
             "━━━━━━━━━━━━━━━━━━━━"
         )
         
-        await app.send_message(
-            target_chat_id,
-            startup_msg,
-            parse_mode=ParseMode.HTML
-        )
+        await app.send_message(target_chat_id, startup_msg)
         logger.info("✅ Startup notification sent")
     except Exception as e:
         logger.warning(f"⚠️ Could not send startup message: {e}")
